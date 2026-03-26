@@ -516,135 +516,122 @@ class WebsiteDownloader:
     def _capture_html(self, p, mode='safe'):
         self.network_resources = {}
         self.log(f"🧭 Modo de captura: {mode}")
-            self.log("🚀 Iniciando navegador...")
-            # Launch with reduced memory footprint
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--disable-dev-shm-usage',  # Overcome limited resource problems
-                    '--no-sandbox',  # Required for Docker
-                    '--disable-setuid-sandbox',
-                    '--disable-gpu',
-                    '--disable-extensions',
-                    '--disable-background-networking',
-                    '--disable-default-apps',
-                    '--disable-sync',
-                    '--disable-translate',
-                    '--metrics-recording-only',
-                    '--mute-audio',
-                    '--no-first-run',
-                    '--safebrowsing-disable-auto-update',
-                    '--disable-features=site-per-process,IsolateOrigins',
-                    '--disable-renderer-backgrounding',
-                    '--disable-background-timer-throttling',
-                    '--disable-breakpad',
-                    '--memory-pressure-off',
-                    '--lang=pt-BR',
-                ]
-            )
-            
-            context = browser.new_context(
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                viewport={'width': 1920, 'height': 1080},
-                device_scale_factor=1,
-                locale='pt-BR',
-                timezone_id='America/Sao_Paulo',
-                color_scheme='light',
-            )
-            context.set_extra_http_headers({
-                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
-            })
-            
-            page = context.new_page()
-            
-            # Capture network responses (including redirects)
-            def capture_response(response):
-                try:
-                    url = response.url
-                    if response.status == 200 and not url.startswith(('data:', 'blob:')):
-                        try:
-                            body = response.body()
-                            resource_data = {
-                                'body': body,
-                                'content_type': response.headers.get('content-type', '')
-                            }
-                            # Store by final URL
-                            self.network_resources[url] = resource_data
-                            
-                            # Also store by original request URL (handles redirects)
-                            request_url = response.request.url
-                            if request_url != url:
-                                self.network_resources[request_url] = resource_data
-                        except:
-                            pass
-                except:
-                    pass
-            
-            page.on("response", capture_response)
-            
-            self.log(f"🌐 Carregando {self.url}...")
+        self.log("🚀 Iniciando navegador...")
+
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-dev-shm-usage',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-gpu',
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-sync',
+                '--disable-translate',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--no-first-run',
+                '--safebrowsing-disable-auto-update',
+                '--disable-features=site-per-process,IsolateOrigins',
+                '--disable-renderer-backgrounding',
+                '--disable-background-timer-throttling',
+                '--disable-breakpad',
+                '--memory-pressure-off',
+                '--lang=pt-BR',
+            ]
+        )
+
+        context = browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            viewport={'width': 1920, 'height': 1080},
+            device_scale_factor=1,
+            locale='pt-BR',
+            timezone_id='America/Sao_Paulo',
+            color_scheme='light',
+        )
+        context.set_extra_http_headers({
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+        })
+
+        page = context.new_page()
+
+        def capture_response(response):
             try:
-                page.goto(self.url, wait_until='load', timeout=60000)
-                self.log("✓ Página carregada (load)")
-                page.wait_for_timeout(3000)
-                self.log("✓ Recursos adicionais carregados")
-            except Exception as e:
-                self.log(f"⚠️ Aviso de carregamento: {str(e)[:100]}")
-                self.log("⚠️ Tentando continuar mesmo assim...")
-            
-            if page.is_closed():
-                raise RuntimeError("Page crashed during initial load")
-
-            self.base_url = page.url
-            page.wait_for_timeout(2000)
-
-            if mode in ('interactive', 'interactive-heavy'):
-                self.log("🧪 Estimulando interações e comportamento de runtime...")
-                try:
-                    self._stimulate_runtime(page)
-                except Exception as e:
-                    self.log(f"⚠️ Runtime agressivo falhou: {e}")
-                    if page.is_closed():
-                        raise RuntimeError("Page crashed during runtime stimulation")
-            
-            iframe_content, is_iframe = self._extract_iframe_content(page)
-            
-            if not is_iframe:
-                self.log("📜 Rolando página para carregar conteúdo lazy...")
-                self._scroll_page(page)
-                page.wait_for_timeout(3000)
-                if mode == 'interactive-heavy' and not page.is_closed():
+                url = response.url
+                if response.status == 200 and not url.startswith(('data:', 'blob:')):
                     try:
-                        self._stimulate_runtime(page)
-                        page.wait_for_timeout(2000)
-                    except Exception as e:
-                        self.log(f"⚠️ Runtime pós-scroll falhou: {e}")
-            
-            # Get cookies from browser for fallback downloads
-            cookies = context.cookies()
-            
-            # Setup requests session with browser cookies
-            self.session = requests.Session()
-            self.session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': self.base_url,
-            })
-            for cookie in cookies:
-                self.session.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain', ''))
-            
-            # Get final HTML - use iframe content if detected
-            if is_iframe and iframe_content:
-                html_content = iframe_content
-                self.log("✨ Usando conteúdo extraído do iframe")
-            else:
-                html_content = page.content()
-            
-            self.log(f"📦 Capturados {len(self.network_resources)} recursos de rede")
-            
+                        body = response.body()
+                        resource_data = {
+                            'body': body,
+                            'content_type': response.headers.get('content-type', '')
+                        }
+                        self.network_resources[url] = resource_data
+                        request_url = response.request.url
+                        if request_url != url:
+                            self.network_resources[request_url] = resource_data
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        page.on("response", capture_response)
+
+        self.log(f"🌐 Carregando {self.url}...")
+        try:
+            page.goto(self.url, wait_until='load', timeout=60000)
+            self.log("✓ Página carregada (load)")
+            page.wait_for_timeout(3000)
+            self.log("✓ Recursos adicionais carregados")
+        except Exception as e:
+            self.log(f"⚠️ Aviso de carregamento: {str(e)[:100]}")
+            self.log("⚠️ Tentando continuar mesmo assim...")
+
+        if page.is_closed():
             browser.close()
-            return html_content
+            raise RuntimeError("Page crashed during initial load")
+
+        self.base_url = page.url
+        page.wait_for_timeout(2000)
+
+        if mode == 'interactive':
+            self.log("🧪 Estimulando interações e comportamento de runtime...")
+            try:
+                self._stimulate_runtime(page)
+            except Exception as e:
+                self.log(f"⚠️ Runtime agressivo falhou: {e}")
+                if page.is_closed():
+                    browser.close()
+                    raise RuntimeError("Page crashed during runtime stimulation")
+
+        iframe_content, is_iframe = self._extract_iframe_content(page)
+
+        if not is_iframe:
+            self.log("📜 Rolando página para carregar conteúdo lazy...")
+            self._scroll_page(page)
+            page.wait_for_timeout(3000)
+
+        cookies = context.cookies()
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': self.base_url,
+        })
+        for cookie in cookies:
+            self.session.cookies.set(cookie['name'], cookie['value'], domain=cookie.get('domain', ''))
+
+        if is_iframe and iframe_content:
+            html_content = iframe_content
+            self.log("✨ Usando conteúdo extraído do iframe")
+        else:
+            html_content = page.content()
+
+        self.log(f"📦 Capturados {len(self.network_resources)} recursos de rede")
+        browser.close()
+        return html_content
 
     def process(self):
         html_content = None
