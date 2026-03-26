@@ -548,8 +548,6 @@ class WebsiteDownloader:
                 device_scale_factor=1,
                 locale='pt-BR',
                 timezone_id='America/Sao_Paulo',
-                geolocation={'latitude': -30.0346, 'longitude': -51.2177},
-                permissions=['geolocation'],
                 color_scheme='light',
             )
             context.set_extra_http_headers({
