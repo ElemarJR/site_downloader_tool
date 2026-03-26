@@ -810,15 +810,15 @@ class WebsiteDownloader:
                 is_menu_control = 'has-submenu' in classes or a.get('aria-haspopup') == 'true'
                 if not is_menu_control:
                     a['href'] = '#'
-+
-+        # 9b. Normalize common interactive states so offline HTML starts from a sane state.
-+        for submenu in soup.select('.sub-menu'):
-+            submenu['aria-hidden'] = 'false'
-+            submenu['aria-expanded'] = 'true'
-+        for trigger in soup.select('[aria-controls][aria-haspopup="true"]'):
-+            trigger['aria-expanded'] = 'true'
-+        for dropdown in soup.select('.elementor-nav-menu--dropdown'):
-+            dropdown['aria-hidden'] = 'false'
+
+        # 9b. Normalize common interactive states so offline HTML starts from a sane state.
+        for submenu in soup.select('.sub-menu'):
+            submenu['aria-hidden'] = 'false'
+            submenu['aria-expanded'] = 'true'
+        for trigger in soup.select('[aria-controls][aria-haspopup="true"]'):
+            trigger['aria-expanded'] = 'true'
+        for dropdown in soup.select('.elementor-nav-menu--dropdown'):
+            dropdown['aria-hidden'] = 'false'
         
         # 10. Handle SPA/framework scripts with selective retention.
         is_gatsby = soup.find(id='___gatsby') is not None
