@@ -524,6 +524,9 @@ class WebsiteDownloader:
                 self.log(f"⚠️ Aviso de carregamento: {str(e)[:100]}")
                 self.log("⚠️ Tentando continuar mesmo assim...")
             
+            if page.is_closed():
+                raise RuntimeError("Page crashed during initial load")
+
             self.base_url = page.url
             
             # Wait for dynamic content
@@ -532,7 +535,10 @@ class WebsiteDownloader:
             # Stimulate interactions so lazy assets, hover states and scroll-triggered
             # sections have a chance to materialize before we freeze the DOM.
             self.log("🧪 Estimulando interações e comportamento de runtime...")
-            self._stimulate_runtime(page)
+            try:
+                self._stimulate_runtime(page)
+            except Exception as e:
+                self.log(f"⚠️ Runtime agressivo falhou: {e}")
             
             # Check for iframe content (site builders like Aura, Webflow, etc.)
             iframe_content, is_iframe = self._extract_iframe_content(page)
@@ -541,8 +547,12 @@ class WebsiteDownloader:
                 self.log("📜 Rolando página para carregar conteúdo lazy...")
                 self._scroll_page(page)
                 page.wait_for_timeout(3000)
-                self._stimulate_runtime(page)
-                page.wait_for_timeout(2000)
+                if not page.is_closed():
+                    try:
+                        self._stimulate_runtime(page)
+                        page.wait_for_timeout(2000)
+                    except Exception as e:
+                        self.log(f"⚠️ Runtime pós-scroll falhou: {e}")
             
             # Get cookies from browser for fallback downloads
             cookies = context.cookies()
