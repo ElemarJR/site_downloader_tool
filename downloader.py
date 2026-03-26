@@ -181,7 +181,7 @@ class WebsiteDownloader:
         self.detected_libraries = found
         return found
 
-    def _write_capture_manifest(self):
+    def _write_capture_manifest(self, soup=None):
         manifest_path = os.path.join(self.output_dir, 'capture-manifest.txt')
         lines = [
             f'URL: {self.url}',
@@ -199,6 +199,16 @@ class WebsiteDownloader:
             f'Captured network resources: {len(self.network_resources)}',
             f'Saved assets: {len(self.resource_cache)}',
         ]
+        if soup is not None:
+            lines += [
+                '',
+                'Interactive patterns detected:',
+                f"- swiper instances: {len(soup.select('.swiper, .elementor-swiper'))}",
+                f"- slick sliders: {len(soup.select('.slick-slider'))}",
+                f"- menus with children: {len(soup.select('.menu-item-has-children'))}",
+                f"- submenu nodes: {len(soup.select('.sub-menu'))}",
+                f"- accordions/tabs: {len(soup.select('.elementor-tab-title, .elementor-accordion-title, .jet-tabs__control'))}",
+            ]
         with open(manifest_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines))
 
@@ -787,17 +797,28 @@ class WebsiteDownloader:
                     elem['data-background'] = local_path
         
         # 9. Fix navigation links that won't work locally
-        # Convert "/" to "#" or "index.html" so they don't break when opened offline
+        # Keep menu/dropdown behavior intact, but avoid broken hard navigation.
         self.log("🔗 Corrigindo links de navegação...")
         for a in soup.find_all('a', href=True):
             href = a['href']
             # Convert root links to stay on page
             if href == '/':
                 a['href'] = '#'
-            # Convert other relative paths to anchors (they won't work offline anyway)
+            # Convert internal root-relative links to anchors only when they are not menu controls
             elif href.startswith('/') and not href.startswith('//'):
-                # Keep as anchor to prevent navigation errors
-                a['href'] = '#'
+                classes = ' '.join(a.get('class', []))
+                is_menu_control = 'has-submenu' in classes or a.get('aria-haspopup') == 'true'
+                if not is_menu_control:
+                    a['href'] = '#'
++
++        # 9b. Normalize common interactive states so offline HTML starts from a sane state.
++        for submenu in soup.select('.sub-menu'):
++            submenu['aria-hidden'] = 'false'
++            submenu['aria-expanded'] = 'true'
++        for trigger in soup.select('[aria-controls][aria-haspopup="true"]'):
++            trigger['aria-expanded'] = 'true'
++        for dropdown in soup.select('.elementor-nav-menu--dropdown'):
++            dropdown['aria-hidden'] = 'false'
         
         # 10. Handle SPA/framework scripts with selective retention.
         is_gatsby = soup.find(id='___gatsby') is not None
@@ -869,7 +890,7 @@ class WebsiteDownloader:
         with open(os.path.join(self.output_dir, 'index.html'), 'w', encoding='utf-8') as f:
             f.write(html_output)
 
-        self._write_capture_manifest()
+        self._write_capture_manifest(soup)
         
         self.log(f"✅ Concluído! {len(self.resource_cache)} assets salvos")
         return True
