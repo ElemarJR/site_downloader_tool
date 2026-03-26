@@ -528,14 +528,23 @@ class WebsiteDownloader:
                     '--disable-background-timer-throttling',
                     '--disable-breakpad',
                     '--memory-pressure-off',
+                    '--lang=pt-BR',
                 ]
             )
             
             context = browser.new_context(
-                user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 viewport={'width': 1920, 'height': 1080},
                 device_scale_factor=1,
+                locale='pt-BR',
+                timezone_id='America/Sao_Paulo',
+                geolocation={'latitude': -30.0346, 'longitude': -51.2177},
+                permissions=['geolocation'],
+                color_scheme='light',
             )
+            context.set_extra_http_headers({
+                'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'
+            })
             
             page = context.new_page()
             
@@ -878,28 +887,52 @@ class WebsiteDownloader:
                         '.elementor-tab-title',
                         '.elementor-accordion-title',
                         '.jet-tabs__control',
-                        '.jet-toggle__control'
+                        '.jet-toggle__control',
+                        '.menu-item-has-children > a',
+                        '.elementor-menu-toggle',
+                        '.swiper',
+                        '.slick-slider'
                     ];
                     selectors.forEach(sel => {
                         document.querySelectorAll(sel).forEach((el, i) => {
-                            if (i >= 24) return;
+                            if (i >= 30) return;
                             try {
                                 el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
                                 el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                                el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
                                 el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
                             } catch(e) {}
                         });
                     });
+                    window.dispatchEvent(new Event('resize'));
                 }
             """)
             page.wait_for_timeout(1200)
+
+            # Try to open menus/dropdowns
+            for selector in ['.menu-item-has-children > a', '.elementor-menu-toggle', '.elementor-nav-menu a']:
+                try:
+                    nodes = page.locator(selector)
+                    count = min(nodes.count(), 6)
+                    for i in range(count):
+                        try:
+                            nodes.nth(i).hover(timeout=1200)
+                            page.wait_for_timeout(250)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
             
             clickable_selectors = [
                 '.elementor-tab-title',
                 '.elementor-accordion-title',
                 '[aria-expanded="false"]',
                 '.jet-tabs__control',
-                '.jet-toggle__control'
+                '.jet-toggle__control',
+                '.swiper-button-next',
+                '.swiper-button-prev',
+                '.slick-next',
+                '.slick-prev'
             ]
             for selector in clickable_selectors:
                 try:
@@ -908,14 +941,14 @@ class WebsiteDownloader:
                     for i in range(count):
                         try:
                             nodes.nth(i).click(timeout=1500)
-                            page.wait_for_timeout(300)
+                            page.wait_for_timeout(350)
                         except Exception:
                             pass
                 except Exception:
                     pass
 
-            # Give intersection observers / lazy loaders one more idle window
-            page.wait_for_timeout(1800)
+            # Give sliders/animations time to settle and lazy assets to load
+            page.wait_for_timeout(2500)
         except Exception as e:
             self.log(f"⚠️ Erro ao estimular runtime: {e}")
 
