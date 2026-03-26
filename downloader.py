@@ -23,6 +23,9 @@ class WebsiteDownloader:
         self.base_url = url
         self.session = None  # Will be set with cookies from browser
         self.log_callback = log_callback or (lambda msg: print(msg))
+        self.detected_libraries = set()
+        self.kept_scripts = []
+        self.removed_scripts = []
         
         if os.path.exists(output_dir):
             shutil.rmtree(output_dir)
@@ -149,6 +152,55 @@ class WebsiteDownloader:
             return full_match
         
         return re.sub(r'url\(\s*([^)]+)\s*\)', replacer, css_content)
+
+    def _detect_runtime_libraries(self, soup):
+        """Infer dynamic/runtime libraries used by the captured page."""
+        patterns = {
+            'gsap': ['gsap', 'scrolltrigger'],
+            'swiper': ['swiper'],
+            'splittype': ['splittype'],
+            'lenis': ['lenis'],
+            'locomotive-scroll': ['locomotive'],
+            'elementor': ['elementor'],
+            'jet-plugins': ['jet-', 'jetengine', 'jet-tricks'],
+            'tsparticles': ['tsparticles'],
+            'slick': ['slick'],
+            'nextjs': ['_next/', '__next_data__', 'self.__next', 'webpack'],
+        }
+        haystacks = []
+        for script in soup.find_all('script'):
+            haystacks.append((script.get('src', '') or '').lower())
+            haystacks.append((script.string or '').lower())
+        for link in soup.find_all('link'):
+            haystacks.append((link.get('href', '') or '').lower())
+        text = '\n'.join(haystacks)
+        found = set()
+        for lib, needles in patterns.items():
+            if any(n in text for n in needles):
+                found.add(lib)
+        self.detected_libraries = found
+        return found
+
+    def _write_capture_manifest(self):
+        manifest_path = os.path.join(self.output_dir, 'capture-manifest.txt')
+        lines = [
+            f'URL: {self.url}',
+            f'Final URL: {self.base_url}',
+            '',
+            'Detected libraries:',
+            *[f'- {x}' for x in sorted(self.detected_libraries)],
+            '',
+            'Kept scripts:',
+            *[f'- {x}' for x in self.kept_scripts[:200]],
+            '',
+            'Removed scripts:',
+            *[f'- {x}' for x in self.removed_scripts[:200]],
+            '',
+            f'Captured network resources: {len(self.network_resources)}',
+            f'Saved assets: {len(self.resource_cache)}',
+        ]
+        with open(manifest_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
 
     def _detect_nextjs(self, soup):
         """Detect if page is built with Next.js even without #__next"""
@@ -738,19 +790,24 @@ class WebsiteDownloader:
                 # Keep as anchor to prevent navigation errors
                 a['href'] = '#'
         
-        # 10. Handle SPA frameworks (Gatsby, Next.js, Nuxt, etc.)
-        # These frameworks use client-side routing that doesn't work offline
-        # The HTML is already server-rendered, so we remove ALL framework scripts
+        # 10. Handle SPA/framework scripts with selective retention.
         is_gatsby = soup.find(id='___gatsby') is not None
         is_nextjs = soup.find(id='__next') is not None or self._detect_nextjs(soup)
         is_nuxt = soup.find(id='__nuxt') is not None
+        self._detect_runtime_libraries(soup)
+        if self.detected_libraries:
+            self.log(f"🧭 Bibliotecas detectadas: {', '.join(sorted(self.detected_libraries))}")
         
         if is_gatsby or is_nextjs or is_nuxt:
             framework = 'Gatsby' if is_gatsby else ('Next.js' if is_nextjs else 'Nuxt')
-            self.log(f"🛡️ Detectado {framework} - removendo scripts do framework...")
+            self.log(f"🛡️ Detectado {framework} - removendo apenas scripts de hidratação/navegação offline-hostis...")
             
             scripts_removed = 0
-            # Safe third-party scripts to keep
+            visual_keep_keywords = [
+                'gsap', 'scrolltrigger', 'swiper', 'splittype', 'lenis', 'locomotive',
+                'slick', 'carousel', 'animation', 'motion', 'elementor', 'jet-',
+                'tsparticles', 'sticky', 'dialog', 'popup'
+            ]
             safe_keywords = ['google', 'analytics', 'gtm', 'gtag', 'facebook', 'pixel', 
                            'elfsight', 'hubspot', 'intercom', 'crisp', 'drift', 'hotjar',
                            'clarity', 'segment', 'mixpanel', 'amplitude', 'adobe', 'privacy']
@@ -758,58 +815,41 @@ class WebsiteDownloader:
             for script in soup.find_all('script'):
                 src = script.get('src', '')
                 script_text = script.string or ''
-                
-                # Check if this is a safe third-party script
-                is_safe = any(safe in src.lower() for safe in safe_keywords)
-                
-                if not is_safe:
-                    # Remove framework-specific scripts
-                    should_remove = False
-                    
-                    # Gatsby patterns
-                    if is_gatsby and ('framework-' in src or 'app-' in src or 
-                                     'commons-' in src or 'component-' in src or
-                                     'webpack-runtime' in src or 'polyfill' in src):
+                src_l = src.lower()
+                txt_l = script_text.lower()
+                is_safe = any(safe in src_l for safe in safe_keywords)
+                keep_for_visuals = any(k in src_l or k in txt_l for k in visual_keep_keywords)
+                should_remove = False
+
+                if not is_safe and not keep_for_visuals:
+                    if is_gatsby and ('framework-' in src_l or 'app-' in src_l or 'commons-' in src_l or 'component-' in src_l or 'webpack-runtime' in src_l or 'polyfill' in src_l):
                         should_remove = True
-                    
-                    # Next.js patterns - be more aggressive
                     if is_nextjs:
-                        # Remove any local script (likely framework code)
-                        if src and not src.startswith(('http://', 'https://', '//')):
+                        if '_next/' in src_l or 'webpack' in src_l or 'polyfill' in src_l:
                             should_remove = True
-                        # Remove scripts with _next paths (may be rewritten to assets/)
-                        if '_next/' in src or 'webpack' in src or 'polyfill' in src:
+                        if '__next' in txt_l or 'self.__next' in txt_l or '__next_data__' in txt_l:
                             should_remove = True
-                        if '__next' in script_text or 'self.__next' in script_text:
+                        if src_l.startswith('assets/') and '-' in src_l and src_l.endswith('.js') and not keep_for_visuals:
                             should_remove = True
-                        # Remove chunk loading scripts
-                        if '-' in src and src.endswith('.js') and 'assets/' in src:
-                            # Pattern like: assets/1517-7693bd4fa37b021c_xxx.js
-                            should_remove = True
-                    
-                    # Nuxt patterns
-                    if is_nuxt and ('_nuxt/' in src or '__NUXT__' in script_text or
-                                   'nuxt' in src.lower()):
+                    if is_nuxt and ('_nuxt/' in src_l or '__nuxt__' in txt_l or 'nuxt' in src_l):
                         should_remove = True
-                    
-                    # Remove inline hydration scripts
-                    if ('hydrate' in script_text.lower() or 
-                        'window.__' in script_text or
-                        'GATSBY' in script_text or
-                        'pageData' in script_text or
-                        'self.__next' in script_text or
-                        '__NEXT_DATA__' in script_text):
+                    if ('hydrate' in txt_l or 'window.__' in txt_l or 'gatsby' in txt_l or 'pagedata' in txt_l or 'self.__next' in txt_l or '__next_data__' in txt_l):
                         should_remove = True
-                    
-                    if should_remove:
-                        script.decompose()
-                        scripts_removed += 1
+
+                descriptor = src or (txt_l[:80].replace('\n', ' ') if txt_l else '<inline-script>')
+                if should_remove:
+                    self.removed_scripts.append(descriptor)
+                    script.decompose()
+                    scripts_removed += 1
+                else:
+                    self.kept_scripts.append(descriptor)
             
-            # Also remove preload/prefetch links that point to framework resources
             links_removed = 0
             for link in soup.find_all('link', rel=lambda r: r and any(x in r for x in ['preload', 'prefetch', 'modulepreload'])):
                 href = link.get('href', '')
-                if '_next/' in href or (href.startswith('assets/') and '-' in href):
+                href_l = href.lower()
+                keep_for_visuals = any(k in href_l for k in visual_keep_keywords)
+                if ('_next/' in href_l or (href_l.startswith('assets/') and '-' in href_l)) and not keep_for_visuals:
                     link.decompose()
                     links_removed += 1
             
@@ -819,6 +859,8 @@ class WebsiteDownloader:
         html_output = str(soup)
         with open(os.path.join(self.output_dir, 'index.html'), 'w', encoding='utf-8') as f:
             f.write(html_output)
+
+        self._write_capture_manifest()
         
         self.log(f"✅ Concluído! {len(self.resource_cache)} assets salvos")
         return True
