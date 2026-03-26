@@ -513,8 +513,9 @@ class WebsiteDownloader:
         
         return None, False
 
-    def process(self):
-        with sync_playwright() as p:
+    def _capture_html(self, p, mode='safe'):
+        self.network_resources = {}
+        self.log(f"🧭 Modo de captura: {mode}")
             self.log("🚀 Iniciando navegador...")
             # Launch with reduced memory footprint
             browser = p.chromium.launch(
@@ -583,10 +584,8 @@ class WebsiteDownloader:
             
             self.log(f"🌐 Carregando {self.url}...")
             try:
-                # Try with a shorter timeout and less strict wait condition
                 page.goto(self.url, wait_until='load', timeout=60000)
                 self.log("✓ Página carregada (load)")
-                # Wait a bit more for additional resources
                 page.wait_for_timeout(3000)
                 self.log("✓ Recursos adicionais carregados")
             except Exception as e:
@@ -597,26 +596,24 @@ class WebsiteDownloader:
                 raise RuntimeError("Page crashed during initial load")
 
             self.base_url = page.url
-            
-            # Wait for dynamic content
             page.wait_for_timeout(2000)
 
-            # Stimulate interactions so lazy assets, hover states and scroll-triggered
-            # sections have a chance to materialize before we freeze the DOM.
-            self.log("🧪 Estimulando interações e comportamento de runtime...")
-            try:
-                self._stimulate_runtime(page)
-            except Exception as e:
-                self.log(f"⚠️ Runtime agressivo falhou: {e}")
+            if mode in ('interactive', 'interactive-heavy'):
+                self.log("🧪 Estimulando interações e comportamento de runtime...")
+                try:
+                    self._stimulate_runtime(page)
+                except Exception as e:
+                    self.log(f"⚠️ Runtime agressivo falhou: {e}")
+                    if page.is_closed():
+                        raise RuntimeError("Page crashed during runtime stimulation")
             
-            # Check for iframe content (site builders like Aura, Webflow, etc.)
             iframe_content, is_iframe = self._extract_iframe_content(page)
             
             if not is_iframe:
                 self.log("📜 Rolando página para carregar conteúdo lazy...")
                 self._scroll_page(page)
                 page.wait_for_timeout(3000)
-                if not page.is_closed():
+                if mode == 'interactive-heavy' and not page.is_closed():
                     try:
                         self._stimulate_runtime(page)
                         page.wait_for_timeout(2000)
@@ -647,6 +644,23 @@ class WebsiteDownloader:
             self.log(f"📦 Capturados {len(self.network_resources)} recursos de rede")
             
             browser.close()
+            return html_content
+
+    def process(self):
+        html_content = None
+        last_error = None
+        for mode in ['interactive', 'safe']:
+            try:
+                with sync_playwright() as p:
+                    html_content = self._capture_html(p, mode=mode)
+                if html_content:
+                    break
+            except Exception as e:
+                last_error = e
+                self.log(f"⚠️ Captura em modo {mode} falhou: {e}")
+                continue
+        if not html_content:
+            raise RuntimeError(f"Capture failed in all modes: {last_error}")
         
         # Process HTML
         self.log("🔧 Processando HTML e assets...")
