@@ -528,6 +528,11 @@ class WebsiteDownloader:
             
             # Wait for dynamic content
             page.wait_for_timeout(2000)
+
+            # Stimulate interactions so lazy assets, hover states and scroll-triggered
+            # sections have a chance to materialize before we freeze the DOM.
+            self.log("🧪 Estimulando interações e comportamento de runtime...")
+            self._stimulate_runtime(page)
             
             # Check for iframe content (site builders like Aura, Webflow, etc.)
             iframe_content, is_iframe = self._extract_iframe_content(page)
@@ -536,6 +541,8 @@ class WebsiteDownloader:
                 self.log("📜 Rolando página para carregar conteúdo lazy...")
                 self._scroll_page(page)
                 page.wait_for_timeout(3000)
+                self._stimulate_runtime(page)
+                page.wait_for_timeout(2000)
             
             # Get cookies from browser for fallback downloads
             cookies = context.cookies()
@@ -805,6 +812,60 @@ class WebsiteDownloader:
         
         self.log(f"✅ Concluído! {len(self.resource_cache)} assets salvos")
         return True
+
+    def _stimulate_runtime(self, page):
+        """Trigger common runtime behaviors so delayed assets and classes load."""
+        try:
+            page.evaluate("""
+                () => {
+                    const selectors = [
+                        'button',
+                        'a',
+                        '[role="button"]',
+                        '.elementor-button',
+                        '.elementor-tab-title',
+                        '.elementor-accordion-title',
+                        '.jet-tabs__control',
+                        '.jet-toggle__control'
+                    ];
+                    selectors.forEach(sel => {
+                        document.querySelectorAll(sel).forEach((el, i) => {
+                            if (i >= 24) return;
+                            try {
+                                el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                                el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                                el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+                            } catch(e) {}
+                        });
+                    });
+                }
+            """)
+            page.wait_for_timeout(1200)
+            
+            clickable_selectors = [
+                '.elementor-tab-title',
+                '.elementor-accordion-title',
+                '[aria-expanded="false"]',
+                '.jet-tabs__control',
+                '.jet-toggle__control'
+            ]
+            for selector in clickable_selectors:
+                try:
+                    nodes = page.locator(selector)
+                    count = min(nodes.count(), 6)
+                    for i in range(count):
+                        try:
+                            nodes.nth(i).click(timeout=1500)
+                            page.wait_for_timeout(300)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            # Give intersection observers / lazy loaders one more idle window
+            page.wait_for_timeout(1800)
+        except Exception as e:
+            self.log(f"⚠️ Erro ao estimular runtime: {e}")
 
     def _scroll_page(self, page):
         """Scroll the page to trigger lazy loading"""
