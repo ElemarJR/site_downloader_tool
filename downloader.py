@@ -471,6 +471,11 @@ class WebsiteDownloader:
                     '--mute-audio',
                     '--no-first-run',
                     '--safebrowsing-disable-auto-update',
+                    '--disable-features=site-per-process,IsolateOrigins',
+                    '--disable-renderer-backgrounding',
+                    '--disable-background-timer-throttling',
+                    '--disable-breakpad',
+                    '--memory-pressure-off',
                 ]
             )
             
